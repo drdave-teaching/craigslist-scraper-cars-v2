@@ -65,7 +65,6 @@ jobs:
             --entry-point="extract_http" \
             --trigger-http \
             ${SA_FLAG} \
-            --labels="app=${FUNCTION_NAME},component=extractor" \
             --set-env-vars="GCS_BUCKET=${BUCKET_NAME},SCRAPES_PREFIX=scrapes,STRUCTURED_PREFIX=structured,SIMPLE_RUN_ID_FORMAT=true"
 
       - name: Get Function URL
@@ -120,3 +119,11 @@ jobs:
               --oidc-service-account-email="${{ vars.DEPLOYER_SA }}" \
               --oidc-token-audience="${FUNCTION_URL}"
           fi
+
+      - name: List functions & Cloud Run services (post-deploy)
+        run: |
+          echo "---- Functions in ${REGION} ----"
+          gcloud functions list --gen2 --region "${REGION}" --format='table(name,state,serviceConfig.uri)'
+          echo "---- Cloud Run services in ${REGION} ----"
+          gcloud run services list --region "${REGION}" \
+            --format='table(metadata.name,status.url,metadata.labels.functions\.cloud\.google\.com/function-name)'
