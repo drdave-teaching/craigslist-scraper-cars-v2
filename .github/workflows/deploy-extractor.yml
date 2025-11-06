@@ -1,0 +1,110 @@
+name: Deploy extractor-per-listing
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+    paths:
+      - 'cloud_function/extractor-per-listing/**'
+      - '.github/workflows/deploy-extractor.yml'
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  PROJECT_ID: ${{ vars.GCP_PROJECT }}
+  REGION: ${{ vars.GCP_REGION }}
+  FUNCTION_NAME: extractor-per-listing
+  FUNCTION_DIR: cloud_function/extractor-per-listing
+  RUNTIME: python312
+  BUCKET_NAME: ${{ vars.GCS_BUCKET }}
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Auth to Google Cloud (WIF via repo variables)
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.DEPLOYER_SA }}
+
+      - name: Setup gcloud
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+
+      - name: Verify source
+        run: |
+          ls -la "${FUNCTION_DIR}"
+          test -f "${FUNCTION_DIR}/main.py"
+          test -f "${FUNCTION_DIR}/requirements.txt"
+
+      - name: Deploy Cloud Function (Gen2, HTTP, authenticated)
+        run: |
+          gcloud functions deploy "${FUNCTION_NAME}" \
+            --gen2 \
+            --region="${REGION}" \
+            --runtime="${RUNTIME}" \
+            --source="${FUNCTION_DIR}" \
+            --entry-point="extract_http" \
+            --trigger-http \
+            --no-allow-unauthenticated \   # << be explicit
+            --set-env-vars="GCS_BUCKET=${BUCKET_NAME},SCRAPES_PREFIX=scrapes,STRUCTURED_PREFIX=structured,SIMPLE_RUN_ID_FORMAT=true"
+
+      - name: Get Function URL
+        id: cfurl
+        run: |
+          URL=$(gcloud functions describe "${FUNCTION_NAME}" --gen2 --region="${REGION}" --format='value(serviceConfig.uri)')
+          echo "url=${URL}" >> "$GITHUB_OUTPUT"
+
+      - name: Grant cloudfunctions.invoker to deployer SA
+        run: |
+          gcloud functions add-invoker-policy-binding "${FUNCTION_NAME}" \
+            --gen2 --region="${REGION}" \
+            --member="serviceAccount:${{ vars.DEPLOYER_SA }}"
+
+      - name: Ensure Scheduler API enabled
+        run: |
+          gcloud services enable cloudscheduler.googleapis.com
+
+      - name: Create/Update Cloud Scheduler job (:5)
+        shell: bash
+        run: |
+          set -euo pipefail
+          gcloud config set project "${PROJECT_ID}"
+          JOB_NAME="extract-per-listing-hourly"
+          REGION="${REGION}"
+          FUNCTION_URL="${{ steps.cfurl.outputs.url }}"
+
+          echo "FUNCTION_URL=${FUNCTION_URL}"
+          if [[ -z "${FUNCTION_URL}" ]]; then
+            echo "ERROR: Function URL empty. Did the deploy finish?"; exit 1
+          fi
+
+          if gcloud scheduler jobs describe "$JOB_NAME" --location="${REGION}" >/dev/null 2>&1; then
+            echo "Updating scheduler job..."
+            gcloud scheduler jobs update http "$JOB_NAME" \
+              --location="${REGION}" \
+              --schedule="5 * * * *" \           # << :5 past the hour
+              --time-zone="America/New_York" \
+              --uri="${FUNCTION_URL}" \
+              --http-method=POST \
+              --message-body='{"overwrite": true, "max_files": 0}' \
+              --oidc-service-account-email="${{ vars.DEPLOYER_SA }}" \
+              --oidc-token-audience="${FUNCTION_URL}"            # << be explicit
+          else
+            echo "Creating scheduler job..."
+            gcloud scheduler jobs create http "$JOB_NAME" \
+              --location="${REGION}" \
+              --schedule="5 * * * *" \
+              --time-zone="America/New_York" \
+              --uri="${FUNCTION_URL}" \
+              --http-method=POST \
+              --message-body='{"overwrite": true, "max_files": 0}' \
+              --oidc-service-account-email="${{ vars.DEPLOYER_SA }}" \
+              --oidc-token-audience="${FUNCTION_URL}"            # << be explicit
+          fi
