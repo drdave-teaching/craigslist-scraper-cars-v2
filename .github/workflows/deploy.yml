@@ -103,19 +103,19 @@ jobs:
           gcloud iam service-accounts add-iam-policy-binding "${RUNTIME_SA}" \
             --member="serviceAccount:${SCHED_AGENT}" \
             --role="roles/iam.serviceAccountTokenCreator" || {
-              echo "::error::Permission denied adding tokenCreator to ${RUNTIME_SA}. Run (once as project owner):
-gcloud iam service-accounts add-iam-policy-binding \"${RUNTIME_SA}\" --member=\"serviceAccount:${SCHED_AGENT}\" --role=\"roles/iam.serviceAccountTokenCreator\""
+              echo "::error::Permission denied adding tokenCreator to ${RUNTIME_SA}. Run (once as project owner):"
+              echo "gcloud iam service-accounts add-iam-policy-binding \"${RUNTIME_SA}\" --member=\"serviceAccount:${SCHED_AGENT}\" --role=\"roles/iam.serviceAccountTokenCreator\""
               exit 1
-          }
-
+            }
+      
           # 2) Allow the deployer SA to 'actAs' the RUNTIME_SA when creating the job
           gcloud iam service-accounts add-iam-policy-binding "${RUNTIME_SA}" \
             --member="serviceAccount:${DEPLOYER_SA}" \
             --role="roles/iam.serviceAccountUser" || {
-              echo "::error::Permission denied adding ServiceAccountUser for ${DEPLOYER_SA} on ${RUNTIME_SA}. Run:
-gcloud iam service-accounts add-iam-policy-binding \"${RUNTIME_SA}\" --member=\"serviceAccount:${DEPLOYER_SA}\" --role=\"roles/iam.serviceAccountUser\""
+              echo "::error::Permission denied adding ServiceAccountUser for ${DEPLOYER_SA} on ${RUNTIME_SA}. Run:"
+              echo "gcloud iam service-accounts add-iam-policy-binding \"${RUNTIME_SA}\" --member=\"serviceAccount:${DEPLOYER_SA}\" --role=\"roles/iam.serviceAccountUser\""
               exit 1
-          }
+            }
 
       - name: Create/Update Cloud Scheduler job (:00 ET, uses runtime SA OIDC)
         shell: bash
